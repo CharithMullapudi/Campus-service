@@ -61,15 +61,15 @@ function AuthenticatedApp({ user, signOut }) {
         const session = await fetchAuthSession()
 
         const groups =
-          session.tokens?.idToken?.payload?.[
-            'cognito:groups'
-          ] || []
+  session.tokens?.accessToken?.payload?.[
+    'cognito:groups'
+  ] || []
 
-        console.log('User groups:', groups)
+console.log('User groups:', groups)
 
-        setIsAdmin(
-          groups.includes('ADMINS')
-        )
+setIsAdmin(
+  groups.includes('ADMINS')
+)
       } catch (error) {
         console.error(
           'Unable to check user role:',
