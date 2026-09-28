@@ -58,7 +58,7 @@ function AuthenticatedApp({ user, signOut }) {
   useEffect(() => {
     async function checkUserRole() {
       try {
-        const session = await fetchAuthSession()
+        const session = await fetchAuthSession({ forceRefresh: true })
 
         const groups =
   session.tokens?.accessToken?.payload?.[
