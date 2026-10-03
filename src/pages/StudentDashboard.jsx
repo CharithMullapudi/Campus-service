@@ -178,75 +178,132 @@ function StudentDashboard({ user, signOut }) {
   // =========================================
 
   async function syncPendingBookings() {
-    if (!navigator.onLine) {
+  if (!navigator.onLine) {
+    return
+  }
+
+  const pendingBookings =
+    getPendingBookings()
+
+  if (pendingBookings.length === 0) {
+    return
+  }
+
+  console.log(
+    `Syncing ${pendingBookings.length} offline booking(s)...`
+  )
+
+  const remainingBookings = []
+
+  // Get the latest bookings from AWS
+  let latestBookings = []
+
+  try {
+    const { data, errors } =
+      await client.models.Booking.list()
+
+    if (errors) {
+      console.error(
+        'Unable to fetch latest bookings:',
+        errors
+      )
+
       return
     }
 
-    const pendingBookings =
-      getPendingBookings()
-
-    if (pendingBookings.length === 0) {
-      return
-    }
-
-    console.log(
-      `Syncing ${pendingBookings.length} offline booking(s)...`
+    latestBookings = data || []
+  } catch (error) {
+    console.error(
+      'Unable to fetch latest bookings:',
+      error
     )
 
-    const remainingBookings = []
+    return
+  }
 
-    for (const booking of pendingBookings) {
-      try {
-        const bookingData = {
-          roomId: booking.roomId,
-          roomNumber: booking.roomNumber,
-          studentEmail: booking.studentEmail,
-          date: booking.date,
-          startTime: booking.startTime,
-          endTime: booking.endTime,
-          status: booking.status,
-        }
+  for (const booking of pendingBookings) {
+    try {
+      // Check the latest backend data for a conflict
+      const conflict = latestBookings.some(
+        (existingBooking) =>
+          existingBooking.roomId === booking.roomId &&
+          existingBooking.date === booking.date &&
+          existingBooking.status !== 'Cancelled' &&
+          booking.startTime < existingBooking.endTime &&
+          booking.endTime > existingBooking.startTime
+      )
 
-        const { data, errors } =
-          await client.models.Booking.create(
-            bookingData
-          )
-
-        if (errors) {
-          console.error(
-            'Unable to sync booking:',
-            errors
-          )
-
-          remainingBookings.push(booking)
-          continue
-        }
-
-        console.log(
-          'Offline booking synced:',
-          data
+      if (conflict) {
+        console.warn(
+          'Offline booking could not be synced because the room is already booked:',
+          booking
         )
-      } catch (error) {
+
+        // Keep it out of the retry queue because
+        // this booking can no longer be created.
+        continue
+      }
+
+      const bookingData = {
+        roomId: booking.roomId,
+        roomNumber: booking.roomNumber,
+        studentEmail: booking.studentEmail,
+        date: booking.date,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        status: booking.status,
+      }
+
+      const { data, errors } =
+        await client.models.Booking.create(
+          bookingData
+        )
+
+      if (errors) {
         console.error(
-          'Error syncing offline booking:',
-          error
+          'Unable to sync booking:',
+          errors
         )
 
         remainingBookings.push(booking)
+        continue
       }
-    }
 
-    if (remainingBookings.length === 0) {
-      clearPendingBookings()
-    } else {
-      localStorage.setItem(
-        'campus_service_pending_bookings',
-        JSON.stringify(remainingBookings)
+      console.log(
+        'Offline booking synced:',
+        data
       )
-    }
 
-    await loadBookings()
+      // Add the newly synced booking to the
+      // local list so another pending booking
+      // cannot create the same time conflict.
+      if (data) {
+        latestBookings.push(data)
+      }
+
+    } catch (error) {
+      console.error(
+        'Error syncing offline booking:',
+        error
+      )
+
+      remainingBookings.push(booking)
+    }
   }
+
+  if (remainingBookings.length === 0) {
+    clearPendingBookings()
+  } else {
+    localStorage.setItem(
+      'campus_service_pending_bookings',
+      JSON.stringify(
+        remainingBookings
+      )
+    )
+  }
+
+  await loadBookings()
+}
 
   // =========================================
   // INITIAL LOAD
