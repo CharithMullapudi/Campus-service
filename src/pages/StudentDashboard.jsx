@@ -1,19 +1,36 @@
 import { useEffect, useState } from 'react'
 import { client } from '../client'
 import { getCurrentUser } from 'aws-amplify/auth'
+import {
+  saveRooms,
+  getCachedRooms,
+  saveBookings,
+  getCachedBookings,
+} from '../offlineStorage'
 
 function StudentDashboard({ user, signOut }) {
   const [requests, setRequests] = useState([])
   const [announcements, setAnnouncements] = useState([])
+  const [rooms, setRooms] = useState([])
+  const [bookings, setBookings] = useState([])
 
   const [activePage, setActivePage] = useState('dashboard')
 
+  // Service Request
   const [serviceType, setServiceType] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
 
+  // Room Booking
+  const [selectedRoom, setSelectedRoom] = useState('')
+  const [bookingDate, setBookingDate] = useState('')
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
+
   const [loading, setLoading] = useState(false)
+  const [bookingLoading, setBookingLoading] = useState(false)
   const [announcementLoading, setAnnouncementLoading] = useState(true)
+  const [roomLoading, setRoomLoading] = useState(true)
 
   // =========================================
   // LOAD SERVICE REQUESTS
@@ -65,16 +82,62 @@ function StudentDashboard({ user, signOut }) {
   }
 
   // =========================================
+  // LOAD ROOMS
+  // =========================================
+
+  async function loadRooms() {
+    setRoomLoading(true)
+
+    try {
+      const { data, errors } =
+        await client.models.Room.list()
+
+      if (errors) {
+        console.error(errors)
+        return
+      }
+
+      setRooms(data || [])
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setRoomLoading(false)
+    }
+  }
+
+  // =========================================
+  // LOAD BOOKINGS
+  // =========================================
+
+  async function loadBookings() {
+    try {
+      const { data, errors } =
+        await client.models.Booking.list()
+
+      if (errors) {
+        console.error(errors)
+        return
+      }
+
+      setBookings(data || [])
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  // =========================================
   // INITIAL LOAD
   // =========================================
 
   useEffect(() => {
     loadRequests()
     loadAnnouncements()
+    loadRooms()
+    loadBookings()
   }, [])
 
   // =========================================
-  // CREATE REQUEST
+  // CREATE SERVICE REQUEST
   // =========================================
 
   async function createRequest(event) {
@@ -117,7 +180,6 @@ function StudentDashboard({ user, signOut }) {
       await loadRequests()
 
       setActivePage('requests')
-
     } catch (error) {
       console.error(error)
       alert('Something went wrong')
@@ -127,15 +189,111 @@ function StudentDashboard({ user, signOut }) {
   }
 
   // =========================================
+  // CREATE ROOM BOOKING
+  // =========================================
+
+  async function createBooking(event) {
+    event.preventDefault()
+
+    if (
+      !selectedRoom ||
+      !bookingDate ||
+      !startTime ||
+      !endTime
+    ) {
+      alert('Please fill all booking fields')
+      return
+    }
+
+    if (startTime >= endTime) {
+      alert('End time must be after start time')
+      return
+    }
+
+    setBookingLoading(true)
+
+    try {
+      const currentUser = await getCurrentUser()
+
+      const room = rooms.find(
+        (item) => item.id === selectedRoom
+      )
+
+      if (!room) {
+        alert('Selected room was not found')
+        return
+      }
+
+      // Basic client-side conflict check
+      const conflict = bookings.some(
+        (booking) =>
+          booking.roomId === room.id &&
+          booking.date === bookingDate &&
+          booking.status !== 'Cancelled' &&
+          startTime < booking.endTime &&
+          endTime > booking.startTime
+      )
+
+      if (conflict) {
+        alert(
+          'This room is already booked for the selected time.'
+        )
+        return
+      }
+
+      const { errors } =
+        await client.models.Booking.create({
+          roomId: room.id,
+          roomNumber: room.roomNumber,
+          studentEmail:
+            currentUser.signInDetails?.loginId ||
+            currentUser.username,
+          date: bookingDate,
+          startTime,
+          endTime,
+          status: 'Confirmed',
+        })
+
+      if (errors) {
+        console.error(errors)
+        alert('Failed to create booking')
+        return
+      }
+
+      alert('Room booked successfully!')
+
+      setSelectedRoom('')
+      setBookingDate('')
+      setStartTime('')
+      setEndTime('')
+
+      await loadBookings()
+
+      setActivePage('bookings')
+    } catch (error) {
+      console.error(error)
+      alert('Something went wrong while booking')
+    } finally {
+      setBookingLoading(false)
+    }
+  }
+
+  // =========================================
   // STATUS CLASS
   // =========================================
 
   function getStatusClass(status) {
-    if (status === 'Resolved') {
+    if (
+      status === 'Resolved' ||
+      status === 'Confirmed'
+    ) {
       return 'student-status resolved'
     }
 
-    if (status === 'In Progress') {
+    if (
+      status === 'In Progress' ||
+      status === 'Pending'
+    ) {
       return 'student-status progress'
     }
 
@@ -147,25 +305,11 @@ function StudentDashboard({ user, signOut }) {
   // =========================================
 
   function getRequestIcon(serviceType) {
-    if (serviceType === 'IT Support') {
-      return '📶'
-    }
-
-    if (serviceType === 'Hostel') {
-      return '🛏️'
-    }
-
-    if (serviceType === 'Library') {
-      return '📚'
-    }
-
-    if (serviceType === 'Transport') {
-      return '🚌'
-    }
-
-    if (serviceType === 'Academic') {
-      return '🎓'
-    }
+    if (serviceType === 'IT Support') return '📶'
+    if (serviceType === 'Hostel') return '🛏️'
+    if (serviceType === 'Library') return '📚'
+    if (serviceType === 'Transport') return '🚌'
+    if (serviceType === 'Academic') return '🎓'
 
     return '📋'
   }
@@ -179,7 +323,7 @@ function StudentDashboard({ user, signOut }) {
   }
 
   // =========================================
-  // DASHBOARD STATISTICS
+  // STATISTICS
   // =========================================
 
   const totalRequests = requests.length
@@ -202,6 +346,10 @@ function StudentDashboard({ user, signOut }) {
 
   const latestAnnouncements =
     announcements.slice(0, 3)
+
+  const today = new Date()
+    .toISOString()
+    .split('T')[0]
 
   return (
     <div className="student-app">
@@ -312,6 +460,36 @@ function StudentDashboard({ user, signOut }) {
 
             <button
               className={`student-nav ${
+                activePage === 'booking'
+                  ? 'active'
+                  : ''
+              }`}
+              onClick={() =>
+                openPage('booking')
+              }
+            >
+              🏫
+              <span>Book Room</span>
+            </button>
+
+
+            <button
+              className={`student-nav ${
+                activePage === 'bookings'
+                  ? 'active'
+                  : ''
+              }`}
+              onClick={() =>
+                openPage('bookings')
+              }
+            >
+              📅
+              <span>My Bookings</span>
+            </button>
+
+
+            <button
+              className={`student-nav ${
                 activePage === 'announcements'
                   ? 'active'
                   : ''
@@ -337,14 +515,12 @@ function StudentDashboard({ user, signOut }) {
 
 
           {/* =================================
-              DASHBOARD PAGE
+              DASHBOARD
           ================================= */}
 
           {activePage === 'dashboard' && (
 
             <>
-
-              {/* WELCOME */}
 
               <section className="student-welcome">
 
@@ -367,8 +543,6 @@ function StudentDashboard({ user, signOut }) {
 
               </section>
 
-
-              {/* STATISTICS */}
 
               <section className="student-statistics">
 
@@ -438,10 +612,7 @@ function StudentDashboard({ user, signOut }) {
               </section>
 
 
-              {/* RECENT REQUESTS + ANNOUNCEMENTS */}
-
               <div className="student-dashboard-grid">
-
 
                 {/* RECENT REQUESTS */}
 
@@ -531,130 +702,57 @@ function StudentDashboard({ user, signOut }) {
 
                   )}
 
-
-                  {requests.length > 3 && (
-
-                    <button
-                      className="student-view-all"
-                      onClick={() =>
-                        openPage('requests')
-                      }
-                    >
-                      View All Requests →
-                    </button>
-
-                  )}
-
                 </section>
 
 
-                {/* LATEST ANNOUNCEMENTS */}
+                {/* BOOKING SUMMARY */}
 
                 <section className="student-card">
 
                   <div className="student-card-heading">
 
-                    <div className="card-icon announcement-icon">
-                      📢
+                    <div className="card-icon blue">
+                      🏫
                     </div>
 
                     <div>
 
                       <h2>
-                        Latest Announcements
+                        Room Booking
                       </h2>
 
                       <p>
-                        Important campus updates.
+                        Book a campus room quickly.
                       </p>
 
                     </div>
 
                   </div>
 
+                  <div className="student-empty">
 
-                  {announcementLoading ? (
-
-                    <div className="student-empty">
-
-                      <h3>
-                        Loading...
-                      </h3>
-
+                    <div className="announcement-empty-icon">
+                      🏫
                     </div>
 
-                  ) : latestAnnouncements.length === 0 ? (
+                    <h3>
+                      {rooms.length} Rooms Available
+                    </h3>
 
-                    <div className="student-empty">
-
-                      <div className="announcement-empty-icon">
-                        📭
-                      </div>
-
-                      <h3>
-                        No announcements
-                      </h3>
-
-                      <p>
-                        There are no announcements yet.
-                      </p>
-
-                    </div>
-
-                  ) : (
-
-                    <div className="student-dashboard-announcements">
-
-                      {latestAnnouncements.map(
-                        (announcement) => (
-
-                          <article
-                            className="student-dashboard-announcement"
-                            key={announcement.id}
-                          >
-
-                            <div className="dashboard-announcement-icon">
-                              📢
-                            </div>
-
-                            <div>
-
-                              <h3>
-                                {announcement.title}
-                              </h3>
-
-                              <span>
-                                📅 {announcement.date}
-                              </span>
-
-                              <p>
-                                {announcement.message}
-                              </p>
-
-                            </div>
-
-                          </article>
-
-                        )
-                      )}
-
-                    </div>
-
-                  )}
-
-
-                  {announcements.length > 3 && (
+                    <p>
+                      Reserve a room for your campus activity.
+                    </p>
 
                     <button
-                      className="student-view-all"
+                      className="student-submit"
                       onClick={() =>
-                        openPage('announcements')
+                        openPage('booking')
                       }
                     >
-                      View All Announcements →
+                      Book a Room →
                     </button>
 
-                  )}
+                  </div>
 
                 </section>
 
@@ -691,17 +789,17 @@ function StudentDashboard({ user, signOut }) {
 
                   <button
                     onClick={() =>
-                      openPage('requests')
+                      openPage('booking')
                     }
                   >
-                    <span>📋</span>
+                    <span>🏫</span>
 
                     <strong>
-                      Track My Requests
+                      Book a Room
                     </strong>
 
                     <small>
-                      Check your request status
+                      Reserve a campus room
                     </small>
 
                   </button>
@@ -709,17 +807,17 @@ function StudentDashboard({ user, signOut }) {
 
                   <button
                     onClick={() =>
-                      openPage('announcements')
+                      openPage('bookings')
                     }
                   >
-                    <span>📢</span>
+                    <span>📅</span>
 
                     <strong>
-                      View Announcements
+                      My Bookings
                     </strong>
 
                     <small>
-                      Read campus updates
+                      View your room bookings
                     </small>
 
                   </button>
@@ -734,7 +832,7 @@ function StudentDashboard({ user, signOut }) {
 
 
           {/* =================================
-              NEW REQUEST PAGE
+              NEW SERVICE REQUEST
           ================================= */}
 
           {activePage === 'new' && (
@@ -873,7 +971,7 @@ function StudentDashboard({ user, signOut }) {
 
 
           {/* =================================
-              MY REQUESTS PAGE
+              MY REQUESTS
           ================================= */}
 
           {activePage === 'requests' && (
@@ -974,7 +1072,297 @@ function StudentDashboard({ user, signOut }) {
 
 
           {/* =================================
-              ANNOUNCEMENTS PAGE
+              BOOK ROOM
+          ================================= */}
+
+          {activePage === 'booking' && (
+
+            <section className="student-card student-page-card">
+
+              <div className="student-card-heading">
+
+                <div className="card-icon blue">
+                  🏫
+                </div>
+
+                <div>
+
+                  <h2>
+                    Book a Campus Room
+                  </h2>
+
+                  <p>
+                    Select a room, date and time for your booking.
+                  </p>
+
+                </div>
+
+              </div>
+
+
+              {roomLoading ? (
+
+                <div className="student-empty">
+                  <h3>
+                    Loading rooms...
+                  </h3>
+                </div>
+
+              ) : rooms.length === 0 ? (
+
+                <div className="student-empty">
+
+                  <div className="announcement-empty-icon">
+                    🏫
+                  </div>
+
+                  <h3>
+                    No rooms available
+                  </h3>
+
+                  <p>
+                    Please contact the administrator.
+                  </p>
+
+                </div>
+
+              ) : (
+
+                <form onSubmit={createBooking}>
+
+                  <div className="student-form-group">
+
+                    <label>
+                      Select Room
+                    </label>
+
+                    <select
+                      value={selectedRoom}
+                      onChange={(event) =>
+                        setSelectedRoom(
+                          event.target.value
+                        )
+                      }
+                      required
+                    >
+
+                      <option value="">
+                        Choose a room
+                      </option>
+
+                      {rooms.map((room) => (
+
+                        <option
+                          key={room.id}
+                          value={room.id}
+                        >
+                          {room.roomNumber} — {room.building}
+                          {' '}({room.roomType}, {room.capacity} seats)
+                        </option>
+
+                      ))}
+
+                    </select>
+
+                  </div>
+
+
+                  <div className="student-form-group">
+
+                    <label>
+                      Booking Date
+                    </label>
+
+                    <input
+                      type="date"
+                      value={bookingDate}
+                      min={today}
+                      onChange={(event) =>
+                        setBookingDate(
+                          event.target.value
+                        )
+                      }
+                      required
+                    />
+
+                  </div>
+
+
+                  <div className="student-form-group">
+
+                    <label>
+                      Start Time
+                    </label>
+
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={(event) =>
+                        setStartTime(
+                          event.target.value
+                        )
+                      }
+                      required
+                    />
+
+                  </div>
+
+
+                  <div className="student-form-group">
+
+                    <label>
+                      End Time
+                    </label>
+
+                    <input
+                      type="time"
+                      value={endTime}
+                      onChange={(event) =>
+                        setEndTime(
+                          event.target.value
+                        )
+                      }
+                      required
+                    />
+
+                  </div>
+
+
+                  <button
+                    type="submit"
+                    className="student-submit"
+                    disabled={bookingLoading}
+                  >
+                    {bookingLoading
+                      ? 'Booking...'
+                      : '🏫  Confirm Room Booking'}
+                  </button>
+
+                </form>
+
+              )}
+
+            </section>
+
+          )}
+
+
+          {/* =================================
+              MY BOOKINGS
+          ================================= */}
+
+          {activePage === 'bookings' && (
+
+            <section className="student-card student-page-card">
+
+              <div className="student-card-heading">
+
+                <div className="card-icon green">
+                  📅
+                </div>
+
+                <div>
+
+                  <h2>
+                    My Room Bookings
+                  </h2>
+
+                  <p>
+                    View your campus room reservations.
+                  </p>
+
+                </div>
+
+              </div>
+
+
+              {bookings.length === 0 ? (
+
+                <div className="student-empty">
+
+                  <div className="announcement-empty-icon">
+                    📅
+                  </div>
+
+                  <h3>
+                    No bookings yet
+                  </h3>
+
+                  <p>
+                    You haven't booked a campus room.
+                  </p>
+
+                  <button
+                    className="student-submit"
+                    onClick={() =>
+                      openPage('booking')
+                    }
+                  >
+                    Book a Room →
+                  </button>
+
+                </div>
+
+              ) : (
+
+                <div className="student-request-list">
+
+                  {bookings.map((booking) => (
+
+                    <article
+                      className="student-request"
+                      key={booking.id}
+                    >
+
+                      <div className="request-icon">
+                        🏫
+                      </div>
+
+                      <div className="request-info">
+
+                        <div className="request-title-row">
+
+                          <h3>
+                            {booking.roomNumber}
+                          </h3>
+
+                          <span
+                            className={getStatusClass(
+                              booking.status
+                            )}
+                          >
+                            {booking.status}
+                          </span>
+
+                        </div>
+
+                        <span className="request-service">
+                          📅 {booking.date}
+                        </span>
+
+                        <p>
+                          🕐 {booking.startTime}
+                          {' '}–{' '}
+                          {booking.endTime}
+                        </p>
+
+                      </div>
+
+                    </article>
+
+                  ))}
+
+                </div>
+
+              )}
+
+            </section>
+
+          )}
+
+
+          {/* =================================
+              ANNOUNCEMENTS
           ================================= */}
 
           {activePage === 'announcements' && (

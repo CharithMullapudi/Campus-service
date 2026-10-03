@@ -13,6 +13,18 @@ function AdminDashboard({ user, signOut }) {
   const [announcementDate, setAnnouncementDate] = useState('')
   const [announcementLoading, setAnnouncementLoading] = useState(false)
 
+  // Room states
+  const [rooms, setRooms] = useState([])
+  const [roomNumber, setRoomNumber] = useState('')
+  const [building, setBuilding] = useState('')
+  const [capacity, setCapacity] = useState('')
+  const [roomType, setRoomType] = useState('')
+  const [roomLoading, setRoomLoading] = useState(false)
+
+  // Booking states
+  const [bookings, setBookings] = useState([])
+  const [bookingLoading, setBookingLoading] = useState(true)
+
   // =========================================
   // LOAD SERVICE REQUESTS
   // =========================================
@@ -65,12 +77,67 @@ function AdminDashboard({ user, signOut }) {
   }
 
   // =========================================
+  // LOAD ROOMS
+  // =========================================
+
+  async function loadRooms() {
+    try {
+      const { data, errors } =
+        await client.models.Room.list()
+
+      if (errors) {
+        console.error(errors)
+        return
+      }
+
+      setRooms(data || [])
+    } catch (error) {
+      console.error(error)
+    }
+  }
+
+  // =========================================
+  // LOAD BOOKINGS
+  // =========================================
+
+  async function loadBookings() {
+    setBookingLoading(true)
+
+    try {
+      const { data, errors } =
+        await client.models.Booking.list()
+
+      if (errors) {
+        console.error(errors)
+        return
+      }
+
+      const sortedBookings = [...(data || [])].sort(
+        (a, b) => {
+          const first = `${a.date} ${a.startTime}`
+          const second = `${b.date} ${b.startTime}`
+
+          return second.localeCompare(first)
+        }
+      )
+
+      setBookings(sortedBookings)
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setBookingLoading(false)
+    }
+  }
+
+  // =========================================
   // INITIAL LOAD
   // =========================================
 
   useEffect(() => {
     loadRequests()
     loadAnnouncements()
+    loadRooms()
+    loadBookings()
   }, [])
 
   // =========================================
@@ -146,6 +213,104 @@ function AdminDashboard({ user, signOut }) {
   }
 
   // =========================================
+  // CREATE ROOM
+  // =========================================
+
+  async function createRoom(event) {
+    event.preventDefault()
+
+    if (
+      !roomNumber.trim() ||
+      !building.trim() ||
+      !capacity ||
+      !roomType
+    ) {
+      alert('Please fill all room fields')
+      return
+    }
+
+    if (Number(capacity) <= 0) {
+      alert('Capacity must be greater than 0')
+      return
+    }
+
+    // Prevent duplicate room numbers
+    const duplicateRoom = rooms.some(
+      (room) =>
+        room.roomNumber.toLowerCase() ===
+        roomNumber.trim().toLowerCase()
+    )
+
+    if (duplicateRoom) {
+      alert('A room with this room number already exists')
+      return
+    }
+
+    setRoomLoading(true)
+
+    try {
+      const { errors } =
+        await client.models.Room.create({
+          roomNumber: roomNumber.trim(),
+          building: building.trim(),
+          capacity: Number(capacity),
+          roomType,
+        })
+
+      if (errors) {
+        console.error(errors)
+        alert('Unable to create room')
+        return
+      }
+
+      setRoomNumber('')
+      setBuilding('')
+      setCapacity('')
+      setRoomType('')
+
+      await loadRooms()
+
+      alert('Room created successfully!')
+    } catch (error) {
+      console.error(error)
+      alert('Something went wrong while creating room')
+    } finally {
+      setRoomLoading(false)
+    }
+  }
+
+  // =========================================
+  // UPDATE BOOKING STATUS
+  // =========================================
+
+  async function updateBookingStatus(id, status) {
+    try {
+      const { errors } =
+        await client.models.Booking.update({
+          id,
+          status,
+        })
+
+      if (errors) {
+        console.error(errors)
+        alert('Unable to update booking')
+        return
+      }
+
+      await loadBookings()
+
+      alert(
+        status === 'Cancelled'
+          ? 'Booking cancelled successfully'
+          : 'Booking confirmed successfully'
+      )
+    } catch (error) {
+      console.error(error)
+      alert('Something went wrong while updating booking')
+    }
+  }
+
+  // =========================================
   // STATISTICS
   // =========================================
 
@@ -161,6 +326,14 @@ function AdminDashboard({ user, signOut }) {
 
   const resolvedRequests = requests.filter(
     (request) => request.status === 'Resolved'
+  ).length
+
+  const confirmedBookings = bookings.filter(
+    (booking) => booking.status === 'Confirmed'
+  ).length
+
+  const cancelledBookings = bookings.filter(
+    (booking) => booking.status === 'Cancelled'
   ).length
 
   // =========================================
@@ -190,11 +363,17 @@ function AdminDashboard({ user, signOut }) {
   // =========================================
 
   function getStatusClass(status) {
-    if (status === 'Resolved') {
+    if (
+      status === 'Resolved' ||
+      status === 'Confirmed'
+    ) {
       return 'admin-status resolved'
     }
 
-    if (status === 'In Progress') {
+    if (
+      status === 'In Progress' ||
+      status === 'Pending'
+    ) {
       return 'admin-status progress'
     }
 
@@ -239,6 +418,31 @@ function AdminDashboard({ user, signOut }) {
     }
 
     const parsedDate = new Date(date)
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      return date
+    }
+
+    return parsedDate.toLocaleDateString(
+      'en-IN',
+      {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }
+    )
+  }
+
+  // =========================================
+  // FORMAT BOOKING DATE
+  // =========================================
+
+  function formatBookingDate(date) {
+    if (!date) {
+      return ''
+    }
+
+    const parsedDate = new Date(`${date}T00:00:00`)
 
     if (Number.isNaN(parsedDate.getTime())) {
       return date
@@ -321,8 +525,8 @@ function AdminDashboard({ user, signOut }) {
             </h2>
 
             <p>
-              Manage campus service requests and
-              communicate important updates to students.
+              Manage campus rooms, bookings,
+              service requests and announcements.
             </p>
 
           </div>
@@ -385,12 +589,12 @@ function AdminDashboard({ user, signOut }) {
           <div className="admin-stat-card">
 
             <div className="admin-stat-icon green">
-              ✅
+              🏫
             </div>
 
             <div>
-              <span>Resolved</span>
-              <strong>{resolvedRequests}</strong>
+              <span>Rooms</span>
+              <strong>{rooms.length}</strong>
             </div>
 
           </div>
@@ -611,6 +815,56 @@ function AdminDashboard({ user, signOut }) {
               onClick={() =>
                 document
                   .getElementById(
+                    'room-management'
+                  )
+                  ?.scrollIntoView({
+                    behavior: 'smooth',
+                  })
+              }
+            >
+
+              <span>🏫</span>
+
+              <strong>
+                Manage Rooms
+              </strong>
+
+              <small>
+                Add campus rooms
+              </small>
+
+            </button>
+
+
+            <button
+              onClick={() =>
+                document
+                  .getElementById(
+                    'booking-management'
+                  )
+                  ?.scrollIntoView({
+                    behavior: 'smooth',
+                  })
+              }
+            >
+
+              <span>📅</span>
+
+              <strong>
+                Manage Bookings
+              </strong>
+
+              <small>
+                Review room reservations
+              </small>
+
+            </button>
+
+
+            <button
+              onClick={() =>
+                document
+                  .getElementById(
                     'create-announcement'
                   )
                   ?.scrollIntoView({
@@ -656,30 +910,463 @@ function AdminDashboard({ user, signOut }) {
 
             </button>
 
+          </div>
 
-            <button
-              onClick={() =>
-                document
-                  .getElementById(
-                    'published-announcements'
+        </section>
+
+
+        {/* =================================
+            ROOM MANAGEMENT
+        ================================= */}
+
+        <section
+          className="admin-announcement-section"
+          id="room-management"
+        >
+
+          <div className="admin-section-heading">
+
+            <div className="admin-section-icon blue-icon">
+              🏫
+            </div>
+
+            <div>
+
+              <h2>
+                Room Management
+              </h2>
+
+              <p>
+                Add campus rooms that students can book.
+              </p>
+
+            </div>
+
+          </div>
+
+
+          <form
+            className="admin-announcement-form"
+            onSubmit={createRoom}
+          >
+
+            <div className="admin-announcement-field">
+
+              <label>
+                Room Number
+              </label>
+
+              <input
+                type="text"
+                value={roomNumber}
+                onChange={(event) =>
+                  setRoomNumber(
+                    event.target.value
                   )
-                  ?.scrollIntoView({
-                    behavior: 'smooth',
-                  })
-              }
-            >
+                }
+                placeholder="Example: A-101"
+                required
+              />
 
-              <span>📢</span>
+            </div>
+
+
+            <div className="admin-announcement-field">
+
+              <label>
+                Building
+              </label>
+
+              <input
+                type="text"
+                value={building}
+                onChange={(event) =>
+                  setBuilding(
+                    event.target.value
+                  )
+                }
+                placeholder="Example: Block A"
+                required
+              />
+
+            </div>
+
+
+            <div className="admin-announcement-field">
+
+              <label>
+                Capacity
+              </label>
+
+              <input
+                type="number"
+                min="1"
+                value={capacity}
+                onChange={(event) =>
+                  setCapacity(
+                    event.target.value
+                  )
+                }
+                placeholder="Example: 60"
+                required
+              />
+
+            </div>
+
+
+            <div className="admin-announcement-field">
+
+              <label>
+                Room Type
+              </label>
+
+              <select
+                value={roomType}
+                onChange={(event) =>
+                  setRoomType(
+                    event.target.value
+                  )
+                }
+                required
+              >
+
+                <option value="">
+                  Select room type
+                </option>
+
+                <option value="Classroom">
+                  Classroom
+                </option>
+
+                <option value="Computer Lab">
+                  Computer Lab
+                </option>
+
+                <option value="Laboratory">
+                  Laboratory
+                </option>
+
+                <option value="Seminar Hall">
+                  Seminar Hall
+                </option>
+
+                <option value="Meeting Room">
+                  Meeting Room
+                </option>
+
+              </select>
+
+            </div>
+
+
+            <div className="admin-announcement-form-footer">
+
+              <p>
+                💡 These rooms will appear in the student booking page.
+              </p>
+
+              <button
+                type="submit"
+                className="admin-announcement-button"
+                disabled={roomLoading}
+              >
+                {roomLoading
+                  ? 'Creating...'
+                  : '🏫  Add Room'}
+              </button>
+
+            </div>
+
+          </form>
+
+
+          {/* ROOM LIST */}
+
+          {rooms.length > 0 && (
+
+            <div className="admin-announcement-list">
+
+              {rooms.map((room) => (
+
+                <article
+                  className="admin-announcement-card"
+                  key={room.id}
+                >
+
+                  <div className="admin-announcement-card-icon">
+                    🏫
+                  </div>
+
+                  <div className="admin-announcement-card-content">
+
+                    <div className="admin-announcement-card-top">
+
+                      <div>
+
+                        <h3>
+                          {room.roomNumber}
+                        </h3>
+
+                        <span className="admin-announcement-date">
+                          🏢 {room.building}
+                        </span>
+
+                      </div>
+
+                      <span className="admin-announcement-badge">
+                        {room.roomType}
+                      </span>
+
+                    </div>
+
+                    <p>
+                      👥 Capacity: {room.capacity} students
+                    </p>
+
+                  </div>
+
+                </article>
+
+              ))}
+
+            </div>
+
+          )}
+
+        </section>
+
+
+        {/* =================================
+            BOOKING MANAGEMENT
+        ================================= */}
+
+        <section
+          className="admin-requests-section"
+          id="booking-management"
+        >
+
+          <div className="admin-section-heading">
+
+            <div className="admin-section-icon green-icon">
+              📅
+            </div>
+
+            <div>
+
+              <h2>
+                Room Bookings
+              </h2>
+
+              <p>
+                Review and manage student room reservations.
+              </p>
+
+            </div>
+
+          </div>
+
+
+          {/* BOOKING SUMMARY */}
+
+          <div className="admin-request-summary">
+
+            <div>
+              <span>Total</span>
 
               <strong>
-                View Announcements
+                {bookings.length}
               </strong>
+            </div>
 
-              <small>
-                Review published updates
-              </small>
 
-            </button>
+            <div>
+              <span>Confirmed</span>
+
+              <strong>
+                {confirmedBookings}
+              </strong>
+            </div>
+
+
+            <div>
+              <span>Cancelled</span>
+
+              <strong>
+                {cancelledBookings}
+              </strong>
+            </div>
+
+
+            <div>
+              <span>Rooms</span>
+
+              <strong>
+                {rooms.length}
+              </strong>
+            </div>
+
+          </div>
+
+
+          {/* BOOKING LIST */}
+
+          <div className="admin-request-list">
+
+            {bookingLoading ? (
+
+              <div className="admin-empty">
+
+                <div className="admin-loading">
+                  Loading bookings...
+                </div>
+
+              </div>
+
+            ) : bookings.length === 0 ? (
+
+              <div className="admin-empty">
+
+                <div className="admin-empty-icon">
+                  📅
+                </div>
+
+                <h3>
+                  No bookings yet
+                </h3>
+
+                <p>
+                  Student room reservations will appear here.
+                </p>
+
+              </div>
+
+            ) : (
+
+              bookings.map((booking) => (
+
+                <article
+                  className="admin-request-card"
+                  key={booking.id}
+                >
+
+                  <div className="admin-request-icon">
+                    🏫
+                  </div>
+
+
+                  <div className="admin-request-content">
+
+                    <div className="admin-request-top">
+
+                      <div>
+
+                        <h3>
+                          Room {booking.roomNumber}
+                        </h3>
+
+                        <span className="admin-request-service">
+                          📅 {formatBookingDate(booking.date)}
+                        </span>
+
+                      </div>
+
+
+                      <span
+                        className={getStatusClass(
+                          booking.status
+                        )}
+                      >
+                        {booking.status}
+                      </span>
+
+                    </div>
+
+
+                    <div className="admin-request-details">
+
+                      <div className="admin-student-info">
+
+                        <span className="admin-detail-label">
+                          Student
+                        </span>
+
+                        <strong>
+                          {booking.studentEmail}
+                        </strong>
+
+                      </div>
+
+
+                      <div className="admin-description">
+
+                        <span className="admin-detail-label">
+                          Time
+                        </span>
+
+                        <p>
+                          🕐 {booking.startTime}
+                          {' '}–{' '}
+                          {booking.endTime}
+                        </p>
+
+                      </div>
+
+                    </div>
+
+
+                    <div className="admin-status-area">
+
+                      <span className="admin-detail-label">
+                        Booking Actions
+                      </span>
+
+
+                      <div className="admin-status-actions">
+
+                        <button
+                          className={
+                            booking.status === 'Confirmed'
+                              ? 'active'
+                              : ''
+                          }
+                          onClick={() =>
+                            updateBookingStatus(
+                              booking.id,
+                              'Confirmed'
+                            )
+                          }
+                        >
+                          ✅ Confirm
+                        </button>
+
+
+                        <button
+                          className={
+                            booking.status === 'Cancelled'
+                              ? 'active'
+                              : ''
+                          }
+                          onClick={() =>
+                            updateBookingStatus(
+                              booking.id,
+                              'Cancelled'
+                            )
+                          }
+                        >
+                          ❌ Cancel
+                        </button>
+
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                </article>
+
+              ))
+
+            )}
 
           </div>
 

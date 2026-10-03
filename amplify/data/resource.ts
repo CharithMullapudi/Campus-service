@@ -1,11 +1,6 @@
 import { a, defineData, type ClientSchema } from "@aws-amplify/backend";
 
 const schema = a.schema({
-
-  // =========================================
-  // SERVICE REQUEST
-  // =========================================
-
   ServiceRequest: a
     .model({
       studentEmail: a.string().required(),
@@ -15,17 +10,9 @@ const schema = a.schema({
       status: a.string().required(),
     })
     .authorization((allow) => [
-      // Student can manage their own requests
       allow.owner(),
-
-      // Admins can manage all requests
       allow.group("ADMINS"),
     ]),
-
-
-  // =========================================
-  // ANNOUNCEMENT
-  // =========================================
 
   Announcement: a
     .model({
@@ -34,11 +21,34 @@ const schema = a.schema({
       date: a.string().required(),
     })
     .authorization((allow) => [
-
-      // All authenticated users can ONLY read
       allow.authenticated().to(["read"]),
+      allow.group("ADMINS"),
+    ]),
 
-      // Only ADMINS can create/update/delete
+  Room: a
+    .model({
+      roomNumber: a.string().required(),
+      building: a.string().required(),
+      capacity: a.integer().required(),
+      roomType: a.string().required(),
+    })
+    .authorization((allow) => [
+      allow.authenticated().to(["read"]),
+      allow.group("ADMINS"),
+    ]),
+
+  Booking: a
+    .model({
+      roomId: a.string().required(),
+      roomNumber: a.string().required(),
+      studentEmail: a.string().required(),
+      date: a.string().required(),
+      startTime: a.string().required(),
+      endTime: a.string().required(),
+      status: a.string().required(),
+    })
+    .authorization((allow) => [
+      allow.owner(),
       allow.group("ADMINS"),
     ]),
 });
@@ -47,7 +57,6 @@ export type Schema = ClientSchema<typeof schema>;
 
 export const data = defineData({
   schema,
-
   authorizationModes: {
     defaultAuthorizationMode: "userPool",
   },
