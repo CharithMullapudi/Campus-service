@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
 import { client } from '../client'
 import { getCurrentUser } from 'aws-amplify/auth'
+
 import {
   saveRooms,
   getCachedRooms,
   saveBookings,
   getCachedBookings,
+  addPendingBooking,
+  getPendingBookings,
+  clearPendingBookings,
 } from '../offlineStorage'
 
 function StudentDashboard({ user, signOut }) {
@@ -32,12 +36,20 @@ function StudentDashboard({ user, signOut }) {
   const [announcementLoading, setAnnouncementLoading] = useState(true)
   const [roomLoading, setRoomLoading] = useState(true)
 
+  const [isOnline, setIsOnline] = useState(
+    navigator.onLine
+  )
+
   // =========================================
   // LOAD SERVICE REQUESTS
   // =========================================
 
   async function loadRequests() {
     try {
+      if (!navigator.onLine) {
+        return
+      }
+
       const { data, errors } =
         await client.models.ServiceRequest.list()
 
@@ -60,6 +72,10 @@ function StudentDashboard({ user, signOut }) {
     setAnnouncementLoading(true)
 
     try {
+      if (!navigator.onLine) {
+        return
+      }
+
       const { data, errors } =
         await client.models.Announcement.list()
 
@@ -89,17 +105,33 @@ function StudentDashboard({ user, signOut }) {
     setRoomLoading(true)
 
     try {
+      if (!navigator.onLine) {
+        const cachedRooms = getCachedRooms()
+        setRooms(cachedRooms)
+        return
+      }
+
       const { data, errors } =
         await client.models.Room.list()
 
       if (errors) {
         console.error(errors)
+
+        const cachedRooms = getCachedRooms()
+        setRooms(cachedRooms)
+
         return
       }
 
-      setRooms(data || [])
+      const roomData = data || []
+
+      setRooms(roomData)
+      saveRooms(roomData)
     } catch (error) {
       console.error(error)
+
+      const cachedRooms = getCachedRooms()
+      setRooms(cachedRooms)
     } finally {
       setRoomLoading(false)
     }
@@ -111,18 +143,109 @@ function StudentDashboard({ user, signOut }) {
 
   async function loadBookings() {
     try {
+      if (!navigator.onLine) {
+        const cachedBookings = getCachedBookings()
+        setBookings(cachedBookings)
+        return
+      }
+
       const { data, errors } =
         await client.models.Booking.list()
 
       if (errors) {
         console.error(errors)
+
+        const cachedBookings = getCachedBookings()
+        setBookings(cachedBookings)
+
         return
       }
 
-      setBookings(data || [])
+      const bookingData = data || []
+
+      setBookings(bookingData)
+      saveBookings(bookingData)
     } catch (error) {
       console.error(error)
+
+      const cachedBookings = getCachedBookings()
+      setBookings(cachedBookings)
     }
+  }
+
+  // =========================================
+  // SYNC OFFLINE BOOKINGS
+  // =========================================
+
+  async function syncPendingBookings() {
+    if (!navigator.onLine) {
+      return
+    }
+
+    const pendingBookings =
+      getPendingBookings()
+
+    if (pendingBookings.length === 0) {
+      return
+    }
+
+    console.log(
+      `Syncing ${pendingBookings.length} offline booking(s)...`
+    )
+
+    const remainingBookings = []
+
+    for (const booking of pendingBookings) {
+      try {
+        const bookingData = {
+          roomId: booking.roomId,
+          roomNumber: booking.roomNumber,
+          studentEmail: booking.studentEmail,
+          date: booking.date,
+          startTime: booking.startTime,
+          endTime: booking.endTime,
+          status: booking.status,
+        }
+
+        const { data, errors } =
+          await client.models.Booking.create(
+            bookingData
+          )
+
+        if (errors) {
+          console.error(
+            'Unable to sync booking:',
+            errors
+          )
+
+          remainingBookings.push(booking)
+          continue
+        }
+
+        console.log(
+          'Offline booking synced:',
+          data
+        )
+      } catch (error) {
+        console.error(
+          'Error syncing offline booking:',
+          error
+        )
+
+        remainingBookings.push(booking)
+      }
+    }
+
+    if (remainingBookings.length === 0) {
+      clearPendingBookings()
+    } else {
+      localStorage.setItem(
+        'campus_service_pending_bookings',
+        JSON.stringify(remainingBookings)
+      )
+    }
+
+    await loadBookings()
   }
 
   // =========================================
@@ -134,6 +257,59 @@ function StudentDashboard({ user, signOut }) {
     loadAnnouncements()
     loadRooms()
     loadBookings()
+
+    if (navigator.onLine) {
+      syncPendingBookings()
+    }
+  }, [])
+
+  // =========================================
+  // ONLINE / OFFLINE LISTENER
+  // =========================================
+
+  useEffect(() => {
+    function handleOnline() {
+      setIsOnline(true)
+
+      loadRooms()
+      loadBookings()
+      loadRequests()
+      loadAnnouncements()
+
+      syncPendingBookings()
+    }
+
+    function handleOffline() {
+      setIsOnline(false)
+
+      const cachedRooms = getCachedRooms()
+      const cachedBookings = getCachedBookings()
+
+      setRooms(cachedRooms)
+      setBookings(cachedBookings)
+    }
+
+    window.addEventListener(
+      'online',
+      handleOnline
+    )
+
+    window.addEventListener(
+      'offline',
+      handleOffline
+    )
+
+    return () => {
+      window.removeEventListener(
+        'online',
+        handleOnline
+      )
+
+      window.removeEventListener(
+        'offline',
+        handleOffline
+      )
+    }
   }, [])
 
   // =========================================
@@ -151,7 +327,8 @@ function StudentDashboard({ user, signOut }) {
     setLoading(true)
 
     try {
-      const currentUser = await getCurrentUser()
+      const currentUser =
+        await getCurrentUser()
 
       const { errors } =
         await client.models.ServiceRequest.create({
@@ -171,7 +348,9 @@ function StudentDashboard({ user, signOut }) {
         return
       }
 
-      alert('Service request submitted successfully!')
+      alert(
+        'Service request submitted successfully!'
+      )
 
       setServiceType('')
       setTitle('')
@@ -206,14 +385,17 @@ function StudentDashboard({ user, signOut }) {
     }
 
     if (startTime >= endTime) {
-      alert('End time must be after start time')
+      alert(
+        'End time must be after start time'
+      )
       return
     }
 
     setBookingLoading(true)
 
     try {
-      const currentUser = await getCurrentUser()
+      const currentUser =
+        await getCurrentUser()
 
       const room = rooms.find(
         (item) => item.id === selectedRoom
@@ -224,7 +406,10 @@ function StudentDashboard({ user, signOut }) {
         return
       }
 
-      // Basic client-side conflict check
+      // =========================================
+      // BASIC CLIENT-SIDE CONFLICT CHECK
+      // =========================================
+
       const conflict = bookings.some(
         (booking) =>
           booking.roomId === room.id &&
@@ -241,23 +426,78 @@ function StudentDashboard({ user, signOut }) {
         return
       }
 
-      const { errors } =
-        await client.models.Booking.create({
-          roomId: room.id,
-          roomNumber: room.roomNumber,
-          studentEmail:
-            currentUser.signInDetails?.loginId ||
-            currentUser.username,
-          date: bookingDate,
-          startTime,
-          endTime,
-          status: 'Confirmed',
-        })
+      const studentEmail =
+        currentUser.signInDetails?.loginId ||
+        currentUser.username
+
+      const bookingData = {
+        roomId: room.id,
+        roomNumber: room.roomNumber,
+        studentEmail,
+        date: bookingDate,
+        startTime,
+        endTime,
+        status: 'Confirmed',
+      }
+
+      // =========================================
+      // OFFLINE BOOKING
+      // =========================================
+
+      if (!navigator.onLine) {
+        const offlineBooking = {
+          ...bookingData,
+          id: `offline-${Date.now()}`,
+          offline: true,
+        }
+
+        addPendingBooking(
+          offlineBooking
+        )
+
+        setBookings(
+          (currentBookings) => [
+            ...currentBookings,
+            offlineBooking,
+          ]
+        )
+
+        alert(
+          'You are offline. Booking saved and will sync when internet returns.'
+        )
+
+        setSelectedRoom('')
+        setBookingDate('')
+        setStartTime('')
+        setEndTime('')
+
+        setActivePage('bookings')
+
+        return
+      }
+
+      // =========================================
+      // ONLINE BOOKING
+      // =========================================
+
+      const { data, errors } =
+        await client.models.Booking.create(
+          bookingData
+        )
 
       if (errors) {
         console.error(errors)
         alert('Failed to create booking')
         return
+      }
+
+      if (data) {
+        setBookings(
+          (currentBookings) => [
+            ...currentBookings,
+            data,
+          ]
+        )
       }
 
       alert('Room booked successfully!')
@@ -272,7 +512,10 @@ function StudentDashboard({ user, signOut }) {
       setActivePage('bookings')
     } catch (error) {
       console.error(error)
-      alert('Something went wrong while booking')
+
+      alert(
+        'Something went wrong while booking'
+      )
     } finally {
       setBookingLoading(false)
     }
@@ -326,30 +569,36 @@ function StudentDashboard({ user, signOut }) {
   // STATISTICS
   // =========================================
 
-  const totalRequests = requests.length
+  const totalRequests =
+    requests.length
 
-  const pendingRequests = requests.filter(
-    (request) => request.status === 'Pending'
-  ).length
+  const pendingRequests =
+    requests.filter(
+      (request) =>
+        request.status === 'Pending'
+    ).length
 
-  const inProgressRequests = requests.filter(
-    (request) => request.status === 'In Progress'
-  ).length
+  const inProgressRequests =
+    requests.filter(
+      (request) =>
+        request.status === 'In Progress'
+    ).length
 
-  const resolvedRequests = requests.filter(
-    (request) => request.status === 'Resolved'
-  ).length
+  const resolvedRequests =
+    requests.filter(
+      (request) =>
+        request.status === 'Resolved'
+    ).length
 
-  const recentRequests = [...requests]
-    .reverse()
-    .slice(0, 3)
+  const recentRequests =
+    [...requests]
+      .reverse()
+      .slice(0, 3)
 
-  const latestAnnouncements =
-    announcements.slice(0, 3)
-
-  const today = new Date()
-    .toISOString()
-    .split('T')[0]
+  const today =
+    new Date()
+      .toISOString()
+      .split('T')[0]
 
   return (
     <div className="student-app">
@@ -374,6 +623,25 @@ function StudentDashboard({ user, signOut }) {
         </div>
 
         <div className="student-account">
+
+          <div
+            style={{
+              padding: '6px 12px',
+              borderRadius: '20px',
+              fontSize: '13px',
+              fontWeight: '600',
+              background: isOnline
+                ? '#dcfce7'
+                : '#fee2e2',
+              color: isOnline
+                ? '#166534'
+                : '#991b1b',
+            }}
+          >
+            {isOnline
+              ? '🟢 Online'
+              : '🔴 Offline'}
+          </div>
 
           <div className="student-account-info">
 
@@ -427,7 +695,6 @@ function StudentDashboard({ user, signOut }) {
               <span>Dashboard</span>
             </button>
 
-
             <button
               className={`student-nav ${
                 activePage === 'new'
@@ -441,7 +708,6 @@ function StudentDashboard({ user, signOut }) {
               ➕
               <span>New Request</span>
             </button>
-
 
             <button
               className={`student-nav ${
@@ -457,7 +723,6 @@ function StudentDashboard({ user, signOut }) {
               <span>My Requests</span>
             </button>
 
-
             <button
               className={`student-nav ${
                 activePage === 'booking'
@@ -472,7 +737,6 @@ function StudentDashboard({ user, signOut }) {
               <span>Book Room</span>
             </button>
 
-
             <button
               className={`student-nav ${
                 activePage === 'bookings'
@@ -486,7 +750,6 @@ function StudentDashboard({ user, signOut }) {
               📅
               <span>My Bookings</span>
             </button>
-
 
             <button
               className={`student-nav ${
@@ -512,7 +775,6 @@ function StudentDashboard({ user, signOut }) {
         ================================= */}
 
         <main className="student-content">
-
 
           {/* =================================
               DASHBOARD
@@ -553,7 +815,10 @@ function StudentDashboard({ user, signOut }) {
                   </div>
 
                   <div>
-                    <span>Total Requests</span>
+                    <span>
+                      Total Requests
+                    </span>
+
                     <strong>
                       {totalRequests}
                     </strong>
@@ -569,7 +834,10 @@ function StudentDashboard({ user, signOut }) {
                   </div>
 
                   <div>
-                    <span>Pending</span>
+                    <span>
+                      Pending
+                    </span>
+
                     <strong>
                       {pendingRequests}
                     </strong>
@@ -585,7 +853,10 @@ function StudentDashboard({ user, signOut }) {
                   </div>
 
                   <div>
-                    <span>In Progress</span>
+                    <span>
+                      In Progress
+                    </span>
+
                     <strong>
                       {inProgressRequests}
                     </strong>
@@ -601,7 +872,10 @@ function StudentDashboard({ user, signOut }) {
                   </div>
 
                   <div>
-                    <span>Resolved</span>
+                    <span>
+                      Resolved
+                    </span>
+
                     <strong>
                       {resolvedRequests}
                     </strong>
@@ -657,46 +931,48 @@ function StudentDashboard({ user, signOut }) {
 
                     <div className="student-request-list">
 
-                      {recentRequests.map((request) => (
+                      {recentRequests.map(
+                        (request) => (
 
-                        <article
-                          className="student-request"
-                          key={request.id}
-                        >
+                          <article
+                            className="student-request"
+                            key={request.id}
+                          >
 
-                          <div className="request-icon">
-                            {getRequestIcon(
-                              request.serviceType
-                            )}
-                          </div>
+                            <div className="request-icon">
+                              {getRequestIcon(
+                                request.serviceType
+                              )}
+                            </div>
 
-                          <div className="request-info">
+                            <div className="request-info">
 
-                            <div className="request-title-row">
+                              <div className="request-title-row">
 
-                              <h3>
-                                {request.title}
-                              </h3>
+                                <h3>
+                                  {request.title}
+                                </h3>
 
-                              <span
-                                className={getStatusClass(
-                                  request.status
-                                )}
-                              >
-                                {request.status}
+                                <span
+                                  className={getStatusClass(
+                                    request.status
+                                  )}
+                                >
+                                  {request.status}
+                                </span>
+
+                              </div>
+
+                              <span className="request-service">
+                                {request.serviceType}
                               </span>
 
                             </div>
 
-                            <span className="request-service">
-                              {request.serviceType}
-                            </span>
+                          </article>
 
-                          </div>
-
-                        </article>
-
-                      ))}
+                        )
+                      )}
 
                     </div>
 
@@ -1017,50 +1293,52 @@ function StudentDashboard({ user, signOut }) {
 
                 <div className="student-request-list">
 
-                  {requests.map((request) => (
+                  {requests.map(
+                    (request) => (
 
-                    <article
-                      className="student-request"
-                      key={request.id}
-                    >
+                      <article
+                        className="student-request"
+                        key={request.id}
+                      >
 
-                      <div className="request-icon">
-                        {getRequestIcon(
-                          request.serviceType
-                        )}
-                      </div>
+                        <div className="request-icon">
+                          {getRequestIcon(
+                            request.serviceType
+                          )}
+                        </div>
 
-                      <div className="request-info">
+                        <div className="request-info">
 
-                        <div className="request-title-row">
+                          <div className="request-title-row">
 
-                          <h3>
-                            {request.title}
-                          </h3>
+                            <h3>
+                              {request.title}
+                            </h3>
 
-                          <span
-                            className={getStatusClass(
-                              request.status
-                            )}
-                          >
-                            {request.status}
+                            <span
+                              className={getStatusClass(
+                                request.status
+                              )}
+                            >
+                              {request.status}
+                            </span>
+
+                          </div>
+
+                          <span className="request-service">
+                            {request.serviceType}
                           </span>
+
+                          <p>
+                            {request.description}
+                          </p>
 
                         </div>
 
-                        <span className="request-service">
-                          {request.serviceType}
-                        </span>
+                      </article>
 
-                        <p>
-                          {request.description}
-                        </p>
-
-                      </div>
-
-                    </article>
-
-                  ))}
+                    )
+                  )}
 
                 </div>
 
@@ -1100,12 +1378,34 @@ function StudentDashboard({ user, signOut }) {
               </div>
 
 
+              {!isOnline && (
+
+                <div
+                  style={{
+                    marginBottom: '16px',
+                    padding: '12px 16px',
+                    borderRadius: '10px',
+                    background: '#fff7ed',
+                    color: '#9a3412',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                  }}
+                >
+                  🔴 You are offline. Room bookings will be
+                  saved locally and synced when you reconnect.
+                </div>
+
+              )}
+
+
               {roomLoading ? (
 
                 <div className="student-empty">
+
                   <h3>
                     Loading rooms...
                   </h3>
+
                 </div>
 
               ) : rooms.length === 0 ? (
@@ -1150,17 +1450,23 @@ function StudentDashboard({ user, signOut }) {
                         Choose a room
                       </option>
 
-                      {rooms.map((room) => (
+                      {rooms.map(
+                        (room) => (
 
-                        <option
-                          key={room.id}
-                          value={room.id}
-                        >
-                          {room.roomNumber} — {room.building}
-                          {' '}({room.roomType}, {room.capacity} seats)
-                        </option>
+                          <option
+                            key={room.id}
+                            value={room.id}
+                          >
+                            {room.roomNumber}
+                            {' — '}
+                            {room.building}
+                            {' '}
+                            ({room.roomType},{' '}
+                            {room.capacity} seats)
+                          </option>
 
-                      ))}
+                        )
+                      )}
 
                     </select>
 
@@ -1235,7 +1541,9 @@ function StudentDashboard({ user, signOut }) {
                   >
                     {bookingLoading
                       ? 'Booking...'
-                      : '🏫  Confirm Room Booking'}
+                      : isOnline
+                        ? '🏫  Confirm Room Booking'
+                        : '📴  Save Offline Booking'}
                   </button>
 
                 </form>
@@ -1307,50 +1615,54 @@ function StudentDashboard({ user, signOut }) {
 
                 <div className="student-request-list">
 
-                  {bookings.map((booking) => (
+                  {bookings.map(
+                    (booking) => (
 
-                    <article
-                      className="student-request"
-                      key={booking.id}
-                    >
+                      <article
+                        className="student-request"
+                        key={booking.id}
+                      >
 
-                      <div className="request-icon">
-                        🏫
-                      </div>
+                        <div className="request-icon">
+                          🏫
+                        </div>
 
-                      <div className="request-info">
+                        <div className="request-info">
 
-                        <div className="request-title-row">
+                          <div className="request-title-row">
 
-                          <h3>
-                            {booking.roomNumber}
-                          </h3>
+                            <h3>
+                              {booking.roomNumber}
+                            </h3>
 
-                          <span
-                            className={getStatusClass(
-                              booking.status
-                            )}
-                          >
-                            {booking.status}
+                            <span
+                              className={getStatusClass(
+                                booking.status
+                              )}
+                            >
+                              {booking.offline
+                                ? 'Waiting for Sync'
+                                : booking.status}
+                            </span>
+
+                          </div>
+
+                          <span className="request-service">
+                            📅 {booking.date}
                           </span>
+
+                          <p>
+                            🕐 {booking.startTime}
+                            {' – '}
+                            {booking.endTime}
+                          </p>
 
                         </div>
 
-                        <span className="request-service">
-                          📅 {booking.date}
-                        </span>
+                      </article>
 
-                        <p>
-                          🕐 {booking.startTime}
-                          {' '}–{' '}
-                          {booking.endTime}
-                        </p>
-
-                      </div>
-
-                    </article>
-
-                  ))}
+                    )
+                  )}
 
                 </div>
 
@@ -1422,40 +1734,42 @@ function StudentDashboard({ user, signOut }) {
 
                 <div className="student-announcement-list">
 
-                  {announcements.map((announcement) => (
+                  {announcements.map(
+                    (announcement) => (
 
-                    <article
-                      className="student-announcement-card"
-                      key={announcement.id}
-                    >
+                      <article
+                        className="student-announcement-card"
+                        key={announcement.id}
+                      >
 
-                      <div className="student-announcement-icon">
-                        📢
-                      </div>
+                        <div className="student-announcement-icon">
+                          📢
+                        </div>
 
-                      <div className="student-announcement-content">
+                        <div className="student-announcement-content">
 
-                        <div className="student-announcement-top">
+                          <div className="student-announcement-top">
 
-                          <h3>
-                            {announcement.title}
-                          </h3>
+                            <h3>
+                              {announcement.title}
+                            </h3>
 
-                          <span>
-                            📅 {announcement.date}
-                          </span>
+                            <span>
+                              📅 {announcement.date}
+                            </span>
+
+                          </div>
+
+                          <p>
+                            {announcement.message}
+                          </p>
 
                         </div>
 
-                        <p>
-                          {announcement.message}
-                        </p>
+                      </article>
 
-                      </div>
-
-                    </article>
-
-                  ))}
+                    )
+                  )}
 
                 </div>
 
